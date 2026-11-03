@@ -1,7 +1,7 @@
 ---
 name: agent-teams
 description: >
-  Spawn and coordinate dynamic multi-agent teams scaled to any task complexity. Use when parallel work, fan-out/fan-in research, or multi-role collaboration would outperform a single agent. Capabilities: auto-compose team from task description, explicit role assignment, dynamic scaling, skill injection per agent, user plan confirmation before launch. Coordination patterns: fan-out/fan-in, pipeline, independent, competitive, hybrid. Auto-detects task type (research, review, build, debug, content, migration) and proposes 1.5-2x scaling. Not for single-query lookups — use exa-search or deep-research. Triggers on (non-exhaustive): "use multiple agents", "spin up a team", "fan out", "parallel agents", "swarm this", "multi-agent", "team of agents", "split this across agents".
+  Spawn and coordinate dynamic multi-agent teams scaled to any task complexity. Use when parallel work, fan-out/fan-in research, or multi-role collaboration would outperform a single agent. Capabilities: auto-compose team from task description, explicit role assignment, dynamic scaling, skill injection per agent, user plan confirmation before launch. Coordination patterns: fan-out/fan-in, pipeline, independent, competitive, hybrid. Auto-detects task type (research, review, build, debug, content, migration) and proposes 1.5-2x scaling. Any web-research role runs on Exa (exa-search scripts, global EXA_API_KEY) behind a preflight gate; an Exa key error stops the team and asks the user for a working key. Not for single-query lookups — use exa-search or deep-research. Triggers on (non-exhaustive): "use multiple agents", "spin up a team", "fan out", "parallel agents", "swarm this", "multi-agent", "team of agents", "split this across agents".
 ---
 
 # Agent Teams — Dynamic Multi-Agent Orchestration
@@ -85,7 +85,7 @@ Team Plan (5 agents):
 - Agent 2: Deep Researcher — deep-research — Reddit, forums, insider blogs, real user experiences
 - Agent 3: Market Researcher — deep-research — Competitor positioning, feature comparison, tier analysis
 - Agent 4: Synthesizer — none — Cross-reference all findings, resolve contradictions, rank by confidence
-- Agent 5: Fact-Checker — web-search — Verify pricing claims, check dates, flag stale data
+- Agent 5: Fact-Checker — exa-search — Verify pricing claims, check dates, flag stale data
 Why 5: Research without synthesis produces raw data, not insight. Fact-checking prevents acting on outdated pricing.
 ```
 
@@ -146,6 +146,25 @@ Each agent receives a prompt constructed from:
 3. **Task specifics** — the concrete work to do (from user input)
 4. **Coordination instructions** — who to wait for, what to produce, where to report
 5. **Scope boundaries** — what NOT to do (prevent overlap with other agents)
+6. **The Exa rule** (below), verbatim, for any agent that searches or reads the web
+
+### Web research runs on Exa (mandatory)
+
+Any agent on any team that searches or reads the web (researchers, fact-checkers, competitor analysts, a debugger looking up an error message) uses **Exa through the `exa-search` skill's scripts**. They read the global `EXA_API_KEY`. Never the claude.ai Exa connector (`mcp__claude_ai_Exa__*`): it holds its own copy of a key and can return 401 while the real one works.
+
+1. **Gate before launch.** If at least one role touches the web, run `bash ~/.claude/skills/exa-search/scripts/exa_doctor.sh` when you present the team plan. It fails → don't launch. Put the exact error lines and a request for a working key in that same message. When the user pastes one, `bash ~/.claude/skills/exa-search/scripts/exa_set_key.sh <key>` checks it live and saves it globally; re-run the gate, then launch. Teams with no web-touching role (a pure code review, a local build) skip the gate.
+2. **Inject this rule verbatim** into every web-touching agent's prompt:
+   ```
+   EXA (mandatory): search and read the web through the exa-search scripts
+   (bash ~/.claude/skills/exa-search/scripts/exa_search.sh | exa_deep_search.sh |
+   exa_crawl.sh | exa_company.sh | exa_linkedin.sh | exa_code.sh). They read the
+   global EXA_API_KEY. Never call mcp__claude_ai_Exa__* tools. If a script prints
+   EXA_FATAL, stop at once and return "EXA_FAILURE:" plus the verbatim error lines.
+   If it prints EXA_ERROR, fix the request or wait a few seconds and retry once;
+   if that fails too, stop and return the same way. Never cover for a broken Exa
+   with other engines.
+   ```
+3. **An agent returns `EXA_FAILURE:`** → stop the team: stop the other running agents (TaskStop), launch nothing new, don't synthesize partial results. Relay the verbatim error to the user and ask for a working key (step 1). Relaunch the unfinished agents once the gate passes.
 
 ---
 
@@ -307,10 +326,11 @@ Run through this before launching each team:
 1. **Parsed input** — extracted role count, descriptions, task context
 2. **Scaled** — proposed additional roles with justifications (see heuristics)
 3. **Confirmed** — user approved the team plan
-4. **Skills assigned** — each agent has skill mappings (or explicit "none")
-5. **Coordination set** — pattern selected, dependencies documented
-6. **Prompts built** — each agent has role + task + scope boundaries + output format
-7. **Launched** — agents started per coordination pattern
+4. **Exa gate passed** — if any role touches the web (Section 4, "Web research runs on Exa")
+5. **Skills assigned** — each agent has skill mappings (or explicit "none")
+6. **Coordination set** — pattern selected, dependencies documented
+7. **Prompts built** — each agent has role + task + scope boundaries + output format, plus the Exa rule for web-touching roles
+8. **Launched** — agents started per coordination pattern
 
 ---
 
@@ -322,6 +342,10 @@ For teams of 4+ agents, the coordinator (or the orchestrating process) tracks:
 - Which agents have reported
 - Whether outputs meet expected format
 - Cross-agent contradictions or gaps
+
+### Exa Failures
+
+An agent returning `EXA_FAILURE:` stops the whole team: no new launches, no partial synthesis. Relay the verbatim error and ask for a working key (Section 4, "Web research runs on Exa", step 3).
 
 ### Conflict Resolution
 
